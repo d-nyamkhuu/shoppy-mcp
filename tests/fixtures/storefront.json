@@ -1,0 +1,326 @@
+{
+  "cart": {
+    "adjustmentTotal": 100.0,
+    "allAdjustments": [],
+    "billAddress": {
+      "company": null,
+      "firstname": null,
+      "id": "ID-1",
+      "isCompany": null,
+      "lastname": null,
+      "phone": null
+    },
+    "digital": true,
+    "id": "ID-1",
+    "itemCount": 2,
+    "lineItems": [
+      {
+        "id": "ID-1",
+        "manifest": {
+          "canSupply": false,
+          "expireAt": null,
+          "fulfillDuration": null,
+          "id": "ID-1",
+          "image": null,
+          "maxQty": null,
+          "name": "Example",
+          "optionsText": "example",
+          "price": 100.0,
+          "slug": "test-product",
+          "totalOnHand": 2
+        },
+        "price": 100.0,
+        "quantity": 2,
+        "total": 100.0
+      }
+    ],
+    "number": "ORDER-1",
+    "paymentState": null,
+    "shipAddress": null,
+    "shipmentState": null,
+    "shipmentTotal": 100.0,
+    "shipments": [],
+    "taxTotal": 100.0,
+    "token": "cart-secret",
+    "total": 100.0,
+    "totalAfterStoreCredit": 100.0,
+    "totalAppliedStoreCredit": 100.0,
+    "totalQuantity": 2,
+    "updatedAt": "2026-09-11T01:00:00Z",
+    "usableStoreCredit": 100.0
+  },
+  "cart_update": {
+    "allAdjustments": [],
+    "id": "ID-1",
+    "itemCount": 2,
+    "lineItems": [],
+    "total": 100.0,
+    "totalAfterStoreCredit": 100.0
+  },
+  "categories": [
+    {
+      "hasChildren": true,
+      "id": "ID-1",
+      "name": "Example",
+      "permalink": "example"
+    }
+  ],
+  "checkout": {
+    "adjustmentTotal": 100.0,
+    "allAdjustments": [],
+    "digital": true,
+    "id": "ID-1",
+    "itemCount": 2,
+    "lineItems": [
+      {
+        "id": "ID-1",
+        "manifest": {
+          "canSupply": true,
+          "expireAt": null,
+          "fulfillDuration": null,
+          "id": "ID-1",
+          "image": "https://example.com/image.jpg",
+          "maxQty": null,
+          "name": "Example",
+          "optionsText": "example",
+          "price": 100.0,
+          "slug": "test-product",
+          "totalOnHand": 2
+        },
+        "price": 100.0,
+        "quantity": 2,
+        "total": 100.0
+      }
+    ],
+    "number": "ORDER-1",
+    "outstandingBalance": 100.0,
+    "paymentState": null,
+    "shipmentState": null,
+    "shipmentTotal": 100.0,
+    "taxTotal": 100.0,
+    "token": "cart-secret",
+    "total": 100.0,
+    "totalAfterStoreCredit": 100.0,
+    "totalAppliedStoreCredit": 100.0,
+    "totalQuantity": 2,
+    "updatedAt": "2026-09-11T01:00:00Z",
+    "usableStoreCredit": 100.0
+  },
+  "child_categories": [
+    {
+      "children": [
+        {
+          "hasChildren": false,
+          "id": "ID-1",
+          "name": "Example",
+          "permalink": "example"
+        }
+      ],
+      "hasChildren": true,
+      "id": "ID-1",
+      "name": "Example",
+      "permalink": "example"
+    }
+  ],
+  "detailed_profile": {
+    "email": "test@example.com",
+    "firstName": "example",
+    "id": "ID-1",
+    "lastName": "example",
+    "mobile": "99112233",
+    "userAddresses": {
+      "nodes": [
+        {
+          "address": {
+            "address1": "example",
+            "address2": null,
+            "alias": "example",
+            "alternativePhone": null,
+            "cdq": [
+              "example",
+              "example",
+              "example"
+            ],
+            "company": null,
+            "district": {
+              "id": "ID-1",
+              "name": "Example"
+            },
+            "firstname": null,
+            "id": "ID-1",
+            "isCompany": null,
+            "lastname": null,
+            "phone": null,
+            "quarter": {
+              "id": "ID-1",
+              "name": "Example"
+            },
+            "state": {
+              "id": "ID-1",
+              "name": "Example"
+            }
+          },
+          "id": "ID-1"
+        }
+      ]
+    }
+  },
+  "listing": {
+    "fulfillDuration": null,
+    "id": "ID-1",
+    "maxQty": null,
+    "minQty": null,
+    "product": {
+      "brand": {
+        "id": "ID-1",
+        "name": "Example"
+      },
+      "description": null,
+      "id": "ID-1",
+      "image": "https://example.com/image.jpg",
+      "name": "Example",
+      "price": 100.0,
+      "sellingPrice": 100.0,
+      "sku": "SKU-1",
+      "slug": "test-product",
+      "title": "Example",
+      "variantsIncludingMaster": [
+        {
+          "backorderable": true,
+          "canSupply": true,
+          "id": "ID-1",
+          "image": "https://example.com/image.jpg",
+          "isMaster": true,
+          "optionsText": "example",
+          "price": 100.0,
+          "sellingPrice": 100.0,
+          "sku": "SKU-1",
+          "totalOnHand": 100.0
+        },
+        {
+          "backorderable": true,
+          "canSupply": true,
+          "id": "ID-1",
+          "image": "https://example.com/image.jpg",
+          "isMaster": false,
+          "optionsText": "example",
+          "price": 100.0,
+          "sellingPrice": 100.0,
+          "sku": "SKU-1",
+          "totalOnHand": 100.0
+        }
+      ]
+    },
+    "shippingCategoryId": "example",
+    "slug": "test-product",
+    "taxons": [
+      {
+        "id": "ID-1",
+        "name": "Example",
+        "permalink": "example"
+      }
+    ]
+  },
+  "order": {
+    "adjustmentTotal": 100.0,
+    "allAdjustments": [],
+    "canceledAt": null,
+    "cancellable": true,
+    "completedAt": "2026-09-11T01:00:00Z",
+    "digital": true,
+    "editable": false,
+    "id": "ID-1",
+    "itemCount": 2,
+    "itemTotal": 100.0,
+    "lineItems": [
+      {
+        "id": "ID-1",
+        "manifest": {
+          "canSupply": true,
+          "fulfillDuration": null,
+          "id": "ID-1",
+          "image": "https://example.com/image.jpg",
+          "maxQty": null,
+          "name": "Example",
+          "optionsText": "example",
+          "price": 100.0,
+          "totalOnHand": 2
+        },
+        "name": "Example",
+        "price": 100.0,
+        "quantity": 2
+      }
+    ],
+    "number": "ORDER-1",
+    "outstandingBalance": 100.0,
+    "paidAt": null,
+    "paymentState": "balance_due",
+    "paymentTotal": 100.0,
+    "shipmentState": "ready",
+    "shipmentTotal": 100.0,
+    "shipments": [
+      {
+        "selectedShippingRate": {
+          "shippingMethod": {
+            "id": "ID-1",
+            "name": "Example"
+          }
+        }
+      }
+    ],
+    "shippedAt": null,
+    "state": "complete",
+    "total": 100.0,
+    "totalAfterStoreCredit": 100.0,
+    "totalAppliedStoreCredit": 100.0,
+    "updatedAt": "2026-09-11T01:00:00Z"
+  },
+  "orders": {
+    "edges": [],
+    "pageInfo": {
+      "endCursor": null,
+      "hasNextPage": false
+    },
+    "totalCount": 0
+  },
+  "profile": {
+    "email": "test@example.com",
+    "firstName": "example",
+    "id": "ID-1",
+    "lastName": "example",
+    "mobile": "99112233"
+  },
+  "search": {
+    "hits": {
+      "hits": [
+        {
+          "_id": "101",
+          "_source": {
+            "id": 101,
+            "image": "https://example.com/image.jpg",
+            "name": "Example",
+            "price": 100.0,
+            "selling_price": 100.0,
+            "slug": "test-product",
+            "title": "Example",
+            "total_on_hand": 2
+          }
+        }
+      ],
+      "total": {
+        "relation": "eq",
+        "value": 1
+      }
+    }
+  },
+  "variant_stores": {
+    "id": "ID-1",
+    "stockItems": [
+      {
+        "countOnHand": 2,
+        "id": "ID-1"
+      }
+    ],
+    "storeItems": []
+  }
+}

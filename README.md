@@ -1,107 +1,131 @@
-# Shoppy Python client
+# shoppy-mcp
 
-A synchronous, typed `Shoppy` client organized into client, query, and model modules. Implements the storefront operations observed in `shoppy.mn.har`; it is not a FastAPI server.
+An MCP server and typed Python client for shopping on [Shoppy.mn](https://shoppy.mn):
+search products, manage the cart, check out, and pay with SocialPay.
 
-Install with `pip install -e .`. Python 3.10+ is required.
+> **Unofficial.** This project is not affiliated with or endorsed by Shoppy.mn, Cody, or
+> Golomt Bank. It uses the endpoints the public storefront web app calls, which may change
+> without notice. Cart, checkout, and payment calls act on your **real account**.
+
+## MCP server
+
+Requires [uv](https://docs.astral.sh/uv/). Add the server to any MCP client that accepts an
+`mcpServers` configuration:
+
+```json
+{
+  "mcpServers": {
+    "shoppy": {
+      "command": "uvx",
+      "args": ["shoppy-mcp"],
+      "env": {
+        "SHOPPY_USERNAME": "your-shoppy-login",
+        "SHOPPY_PASSWORD": "your-shoppy-password"
+      }
+    }
+  }
+}
+```
+
+Credentials can also come from a dotenv file (see [`.env.example`](.env.example)):
+
+```bash
+uvx shoppy-mcp --env-file /absolute/path/to/.env
+```
+
+Environment variables take precedence over the file. The server logs in once at startup and
+exits if credentials are missing or login fails. Tokens are not refreshed; restart the server
+when the session expires.
+
+### Tools
+
+| Tool | Purpose |
+| --- | --- |
+| `search_products`, `get_categories` | Find in-stock products by text and category, with pagination. |
+| `get_product`, `get_variant_stores` | Inspect a product by slug, choose a variant, check store stock. |
+| `get_profile` | Account contact details; `detailed=true` adds saved delivery addresses. |
+| `get_cart`, `add_to_cart`, `update_cart_item` | Read or change the cart; quantity zero removes a line. |
+| `checkout` | Save checkout details for the current cart using the account's addresses. |
+| `get_orders`, `get_order` | Order history (most recently updated first) and payment/shipping status. |
+| `pay_with_socialpay` | Create a SocialPay payment for an order and return its invoice URL; optionally send it to the account's mobile. |
+
+A typical flow:
+
+1. `search_products(query="adidas")`, then `get_product(slug=...)` to pick a variant.
+2. `add_to_cart(variant_id=..., quantity=1)` and review with `get_cart()`.
+3. `checkout()`. If the account has several saved addresses and none is selected for the cart,
+   select one on Shoppy first.
+4. `pay_with_socialpay(number=...)` and open the returned `url`. Pass `send_to_phone=true` to
+   also send the invoice to the account's mobile.
+5. `get_order(number=...)` and check `paymentState`.
+
+Things to know:
+
+- **Only `paymentState: "paid"` confirms payment.** `phoneRequest: "PENDING"` means the request was
+  sent, a `complete` order can still have a balance due, and `paidAt` can be set on a failed payment.
+- **Nothing is retried automatically.** Each `pay_with_socialpay` call creates a new attempt. After a
+  failed mutation, inspect the cart or order before trying again; changes may already be saved.
+- Tool annotations mark read and write tools, but nothing enforces shopper confirmation.
+- Responses are validated Pydantic models (`shoppy/models.py`) with the fields needed for shopping.
+  Cart tokens, provider tokens, opaque payment data, and personal identifiers are omitted.
+- Expected storefront failures are reported to the agent; other error details are masked.
+
+## Python client
+
+```bash
+pip install shoppy-mcp
+```
 
 ```python
 from shoppy import Shoppy
 
-with Shoppy() as shop:
-    shop.login_from_env()  # Reads USER and PASS from .env, not the shell USER
-    profile = shop.me()
-    categories = shop.categories()
-    children = shop.categories(parent_id=categories[0]["id"])
-    results = shop.search_products("adidas", limit=20, offset=0)
-    category_results = shop.search_products(category_id=categories[0]["id"])
-    cart = shop.current_order()
+shop = Shoppy()                      # or Shoppy(token="...")
+shop.login("your-username", "your-password")
+
+results = shop.search_products("adidas", limit=20)
+listing = shop.product("product-slug")  # choose from listing["product"]["variantsIncludingMaster"]
+cart = shop.add_to_cart("variant-id", quantity=1)
+order = shop.checkout()
+payment = shop.initiate_payment(order_number=order["number"], action="golomt_wallet")
+shop.send_socialpay(payment["attributes"]["url"])  # optional: notify the account's mobile
+status = shop.order_status(order["number"])
 ```
 
-Alternatively use `Shoppy(token="...")` or `shop.login(username, password, basic_auth="Basic ...")`.
-Set `SHOPPY_BASIC_AUTH="Basic ..."` in `.env` alongside `USER` and `PASS`. The login Basic header is sent only to the OAuth token endpoint. Set `SHOPPY_SEARCH_AUTH="Basic ..."` for Elasticsearch search, or pass `Shoppy(search_auth="Basic ...")`. Search uses its own Basic header, never the API Bearer token.
+Other methods: `profile()`, `categories()`, `menus()`, `flat_categories()`, `variant_stores()`,
+`current_cart()`, `update_cart_item()`, `list_orders()`, `payment_methods()`, `check_login()`.
+The client returns the storefront's JSON as dictionaries.
 
-Login retains the returned access token in memory and sends `Authorization: Bearer <token>` only to `api3.cody.mn`. Token refresh is not automatic; log in again when the token expires. Returned login data includes secrets: do not log it.
+- `checkout()` takes no arguments. It uses the account email, the cart's billing details (or the
+  profile name and mobile), and the cart's shipping address or the account's only saved address.
+  It saves checkout details and does not start a payment.
+- `send_socialpay(url)` sends an existing SocialPay invoice to the account's mobile number, which
+  must have eight digits. A `PENDING` result is not a payment confirmation.
+- The access token is kept in memory and sent only to the Shoppy API. Login responses contain
+  secrets; do not log them.
+- A client holds one account and is not meant for concurrent use.
 
-## Cart and checkout
+### Errors
 
-Choose a product and variant explicitly. These calls change the real account's cart and create an unpaid order.
+- `ShoppyError` (a `ValueError`) for invalid input and unsuccessful storefront or bank responses.
+  Its messages are safe to show.
+- `NotFoundError` (a `ShoppyError`) when the storefront reports a missing resource. `product()`,
+  `variant_stores()`, and `order_status()` return `None` instead.
+- HTTP and transport errors propagate from HTTPX.
 
-```python
-with Shoppy() as shop:
-    shop.login_from_env()
-    listing = shop.product("your-product-slug")
-    # Inspect listing["product"]["variantsIncludingMaster"] for the desired variant.
-    cart = shop.add_to_cart("chosen-variant-id", quantity=1)
-    # shop.update_cart_item(line_item_id, quantity=0) removes a line item.
-    submitted = shop.checkout(
-        email="your-email@example.com",
-        billing_address={
-            "firstname": "Your first name",
-            "lastname": "Your last name",
-            "phone": "Your phone",
-            "isCompany": False,
-        },
-    )
-    payment = shop.initiate_payment(action="m_bank_card")
-    # payment contains provider handoff data for your application.
-    order = shop.order(cart["number"])
+## Development
+
+```bash
+uv venv && uv pip install -e '.[dev]'
+uv run pytest -q
+uv run ruff check .
 ```
 
-`current_order(number=..., token=...)` can attach an existing cart. Cart handles are retained in memory after retrieval and additions. With no current cart, addition sends null handles; that path needs live validation because the HAR starts with an existing cart.
+Tests use mocked HTTP and never contact Shoppy or payment services. See [AGENTS.md](AGENTS.md)
+for coding and test conventions.
 
-`checkout()` saves billing/shipping details and then submits the order, returning `{"order": ..., "paymentAction": ...}`. It also accepts `number`, `shipping_address`, `shipping_address_id`, `shipping_method_id`, and `action` (default `"qpay_merchant"`). Submission runs only after the update succeeds. These are two API requests: if submission fails, the saved details remain.
+Releases are published to PyPI from GitHub releases by
+[`.github/workflows/publish.yml`](.github/workflows/publish.yml) using trusted publishing.
 
-`payment_methods()` lists available providers. `initiate_payment(action=...)` returns the provider response, including the data your application needs to open the payment provider. For M Bank this includes a URL, SessionID, and OrderID for a POST form; SocialPay returns a GET URL. The client does not fetch or open payment pages.
+## License
 
-Orders marked `complete` may still have `paymentState: balance_due`. Check `paidAt` and payment state rather than treating submission as payment success.
-
-## Errors
-
-HTTP and transport errors propagate directly from HTTPX. Invalid inputs and unsuccessful or malformed API responses raise standard `ValueError` exceptions. Requests are not automatically retried, and failures do not block subsequent calls.
-
-`.env` is ignored by Git. Do not publish the HAR, tokens, returned bank session data, or payment-page HTML.
-
-## List orders
-
-`orders()` returns a GraphQL connection containing `edges`, `totalCount`, and `pageInfo`. It defaults to 10 orders sorted by `updated_at` descending, without status or shipment filters. It does not change the current cart.
-
-```python
-with Shoppy() as shop:
-    shop.login_from_env()
-    page = shop.orders(first=10)
-    orders = [edge["node"] for edge in page["edges"]]
-    if page["pageInfo"]["hasNextPage"]:
-        next_page = shop.orders(first=10, cursor=page["pageInfo"]["endCursor"])
-
-    # Optional filter and sort, using fields observed in the HAR:
-    pending = shop.orders(
-        filter={
-            "state": {"in": ["complete", "resumed"]},
-            "shipmentState": {"in": ["backorder", "partial", "pending", "ready"]},
-        },
-        sort={"field": "updated_at", "direction": "desc"},
-    )
-```
-
-An optional `status` string is passed through as the API's `OrderStatus` enum; its allowed values were not captured. Each node includes order number, totals, payment/shipment states, timestamps, and line items. Use `order(number)` for full details.
-
-## SocialPay mobile requests
-
-The SocialPay capture initializes payment through the existing `orderPay` mutation with `action="golomt_wallet"`. `initiate_socialpay()` provides a named convenience method:
-
-```python
-with Shoppy() as shop:
-    shop.login_from_env()
-    payment = shop.initiate_socialpay(number="your-order-number")
-    result = shop.send_payment_to_mobile(
-        payment,
-        phone="9911 2233",  # Replace with the intended recipient's number.
-        bank_token="your-bank-session-token",
-    )
-```
-
-`send_payment_to_mobile` sends a real payment request to the supplied phone. It fetches invoice details, prepares the mobile request, checks the new SocialPay session, and sends the returned opaque payload once. A successful send returns `status: PENDING` and `refToken`; that is not confirmation of payment. The client does not approve payment or poll for completion.
-
-The bank Bearer token is separate from the Shoppy token. The method uses an explicitly supplied `bank_token`, or the token returned by `/payment/get/details`. In the capture, payment details contain an empty token; the bank JavaScript falls back to browser local storage. Supply that bank-session token when necessary. The client never substitutes Shoppy credentials for bank credentials.
-
-Only the captured `newSpCheckSession` response `desc: Y` flow is implemented. A different session result stops before sending; the alternate legacy/WebSocket flow is not implemented. Provider errors raise standard exceptions with no automatic retries.
+[MIT](LICENSE)

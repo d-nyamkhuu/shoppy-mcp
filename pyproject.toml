@@ -1,14 +1,48 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "shoppy-client"
+name = "shoppy-mcp"
 version = "0.1.0"
-description = "Typed Python client for Shoppy storefront workflows"
+description = "Unofficial MCP server and typed Python client for the Shoppy.mn storefront"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Nyamkhuu Demberelsuren" }]
 requires-python = ">=3.10"
-dependencies = ["httpx>=0.27,<1", "python-dotenv>=1,<2"]
+keywords = ["mcp", "shoppy", "shopping", "fastmcp"]
+dependencies = [
+    "httpx>=0.27,<1",
+    "pydantic>=2.11,<3",
+    "fastmcp>=3.2.4,<4",
+    "python-dotenv>=1,<2",
+]
+
+[project.urls]
+Repository = "https://github.com/d-nyamkhuu/shoppy-mcp"
+Issues = "https://github.com/d-nyamkhuu/shoppy-mcp/issues"
+
+[project.scripts]
+shoppy-mcp = "shoppy.mcp:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<10", "pytest-asyncio>=1,<2",
+    "graphql-core>=3.2,<3.3", "jsonschema>=4,<5", "ruff>=0.6",
+]
 
 [tool.setuptools.packages.find]
 include = ["shoppy*"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]

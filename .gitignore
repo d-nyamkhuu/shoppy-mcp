@@ -219,3 +219,9 @@ __marimo__/
 
 # HTTP archive captures
 *.har
+
+# Local code index
+.codegraph/
+
+# Local notes
+docs/

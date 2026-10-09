@@ -1,120 +1,111 @@
 """Synchronous storefront client with explicit checkout and payment steps."""
 
-from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
-from uuid import UUID
 
 import httpx
-from dotenv import dotenv_values
 
 from . import queries
 from .models import JSON
+
+# Public client headers sent by the shoppy.mn web app; they do not identify an account.
+LOGIN_AUTH = "Basic MmI1ZWYyYWQ3ODE0MGMzMTJkYTZjODdhM2ZmMTk3MDJkM2ZjOTk1ODM4NTFjMmU0NDBiMTAyNDA5ZDQ4NmFiMDozMzljYTdiMDg4YjBkYWIwN2E0NDNmMDM1NTZlZDdiYmNmMzEwMTUxNDI4NmY0ODQ0MzI4Yzg4N2JkODQ2ZGE4"
+SEARCH_AUTH = "Basic Z3Vlc3Q6U2hvcHB5R3Vlc3Q="
+SHOPPY_HEADERS = {"Referer": "https://shoppy.mn/", "Origin": "https://shoppy.mn"}
+SEARCH_WINDOW = 10000
+
+
+class ShoppyError(ValueError):
+    """An expected storefront or payment failure whose message is safe to show."""
+
+
+class NotFoundError(ShoppyError):
+    """The storefront reported that a requested resource does not exist."""
 
 
 class Shoppy:
     """Access Shoppy using a Bearer token or :meth:`login`.
 
-    A client owns one session and cart and is not intended for concurrent use.
+    A client retains one account and is not intended for concurrent use.
     Failed requests are never retried automatically, especially mutations.
     """
 
-    def __init__(
-        self,
-        *,
-        token: str | None = None,
-        search_auth: str | None = None,
-        timeout: float = 30.0,
-        transport: httpx.BaseTransport | None = None,
-    ) -> None:
-        self._client = httpx.Client(timeout=timeout, transport=transport)
+    def __init__(self, *, token: str | None = None, timeout: float = 30.0) -> None:
+        """Configure authentication and the timeout for each request."""
+        self._timeout = timeout
         self._token = token.removeprefix("Bearer ") if token else None
-        self._search_auth = search_auth
-        self._number: str | None = None
-        self._order_token: str | None = None
-
-    def __enter__(self) -> "Shoppy":
-        return self
-
-    def __exit__(self, *args: Any) -> None:
-        self.close()
-
-    def close(self) -> None:
-        """Release pooled connections."""
-        self._client.close()
-
-    def _request(
-        self, method: str, url: str, *, authenticated: bool = True,
-        basic_auth: str | None = None,
-        extra_headers: dict[str, str] | None = None,
-        validate: Callable[[JSON], bool] | None = None,
-        **kwargs: Any,
-    ) -> Any:
-        headers = {"Referer": "https://shoppy.mn/", "Origin": "https://shoppy.mn"}
-        if authenticated and self._token and urlsplit(url).hostname == "api3.cody.mn":
-            headers["Authorization"] = f"Bearer {self._token}"
-        if self._search_auth and url.startswith("https://elastic.cody.mn/"):
-            headers["Authorization"] = self._search_auth
-        if basic_auth and url == "https://api3.cody.mn/oauth/token":
-            headers["Authorization"] = basic_auth
-        if extra_headers:
-            headers.update(extra_headers)
-        response = self._client.request(method, url, headers=headers, **kwargs)
-        response.raise_for_status()
-        result = response.json()
-        if not isinstance(result, dict):
-            raise ValueError("Expected a JSON object response.")
-        if result.get("errors") or result.get("error"):
-            raise ValueError("API reported an error.")
-        if url.endswith("/graphql"):
-            if not isinstance(result.get("data"), dict):
-                raise ValueError("GraphQL response omitted data.")
-            for value in result["data"].values():
-                if isinstance(value, dict) and (value.get("errors") or value.get("error")):
-                    raise ValueError("GraphQL operation reported an error.")
-        if url.endswith("/oauth/token") and not result.get("access_token"):
-            raise ValueError("Login response omitted access_token.")
-        if validate is not None and not validate(result):
-            raise ValueError("Payment provider returned an unsuccessful or incomplete response.")
-        return result
 
     def _graphql(self, query: str, variables: JSON | None = None) -> JSON:
-        return self._request(
-            "POST", "https://api3.cody.mn/graphql",
-            json={"query": query, "variables": variables or {}},
-        )["data"]
+        """Execute a GraphQL operation and return its data."""
+        headers = dict(SHOPPY_HEADERS)
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
+        response = httpx.post(
+            "https://api3.cody.mn/graphql", headers=headers, timeout=self._timeout,
+            json={"query": query, "variables": variables},
+        )
+        response.raise_for_status()
+        result = response.json()
+        errors = result.get("errors")
+        if errors:
+            messages = [error.get("message", "") for error in errors]
+            if all("not found" in message for message in messages):
+                raise NotFoundError("Shoppy could not find the requested item.")
+            if all("үлдэгдэлгүй" in message for message in messages):
+                raise ShoppyError("Shoppy reports the selected variant is out of stock.")
+            raise ShoppyError("GraphQL reported an error.")
+        return result["data"]
+
+    def _search(self, body: JSON) -> JSON:
+        """Search the product index and return the JSON response."""
+        headers = {**SHOPPY_HEADERS, "Authorization": SEARCH_AUTH}
+        response = httpx.post(
+            "https://elastic.cody.mn/shoppy/_search",
+            headers=headers, json=body, timeout=self._timeout,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def _bank_request(self, path: str, payload: JSON, *, url: str, token: str | None = None) -> JSON:
+        """Send a bank request and return the JSON response."""
+        headers = {"Origin": "https://ecommerce.golomtbank.com", "Referer": url}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        response = httpx.post(
+            f"https://ecommerce.golomtbank.com{path}",
+            headers=headers, json=payload, timeout=self._timeout,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    @staticmethod
+    def _check_bank_header(result: JSON) -> None:
+        """Reject a bank response whose header reports a failure."""
+        if result["header"]["code"] != 200 or result["header"]["status"] != "success":
+            error = result["body"]["error"]
+            raise ShoppyError(f"Payment provider reported an error: {error['errorDesc']}")
 
     def check_login(self, login: str) -> JSON:
+        """Check whether a login identifier is registered."""
         return self._graphql(queries.CHECK_LOGIN, {"login": login, "no_token": True})["exists"]
 
-    def login(self, username: str, password: str, *, basic_auth: str) -> JSON:
+    def login(self, username: str, password: str) -> JSON:
         """Authenticate and retain the access token; never persist credentials."""
-        basic_auth = basic_auth.strip()
-        if not basic_auth.startswith("Basic ") or not basic_auth[6:].strip():
-            raise ValueError("basic_auth must be a Basic authorization header")
-        result = self._request(
-            "POST", "https://api3.cody.mn/oauth/token", authenticated=False,
-            basic_auth=basic_auth,
+        response = httpx.post(
+            "https://api3.cody.mn/oauth/token",
+            headers={**SHOPPY_HEADERS, "Authorization": LOGIN_AUTH},
             data={"username": username, "password": password, "grant_type": "password"},
+            timeout=self._timeout,
         )
+        response.raise_for_status()
+        result = response.json()
+        if not result["access_token"]:
+            raise ShoppyError("Login response omitted access_token.")
         self._token = result["access_token"]
-        self._number = self._order_token = None
         return result
 
-    def login_from_env(self, path: str | Path = ".env") -> JSON:
-        """Read USER/PASS/SHOPPY_BASIC_AUTH from dotenv, ignoring shell USER."""
-        values = dotenv_values(path)
-        username, password = values.get("USER"), values.get("PASS")
-        if not username or not password:
-            raise ValueError("The dotenv file must contain USER and PASS.")
-        basic_auth = values.get("SHOPPY_BASIC_AUTH")
-        if not basic_auth:
-            raise ValueError("The dotenv file must contain SHOPPY_BASIC_AUTH.")
-        self._search_auth = values.get("SHOPPY_SEARCH_AUTH") or self._search_auth
-        return self.login(username, password, basic_auth=basic_auth)
-
-    def me(self, *, detailed: bool = False) -> JSON:
+    def profile(self, *, detailed: bool = False) -> JSON:
+        """Return the account profile, optionally including saved addresses."""
         return self._graphql(queries.DETAILED_ME if detailed else queries.ME)["me"]
 
     def search_products(
@@ -122,8 +113,8 @@ class Shoppy:
         limit: int = 30, offset: int = 0,
     ) -> JSON:
         """Return search hits and totals, optionally restricted to a category."""
-        if not 1 <= limit <= 100 or offset < 0:
-            raise ValueError("limit must be 1..100 and offset must be nonnegative")
+        if offset + limit > SEARCH_WINDOW:
+            raise ShoppyError(f"Search covers only the first {SEARCH_WINDOW} results; offset + limit must not exceed {SEARCH_WINDOW}.")
         must: list[JSON] = [
             {"range": {"selling_price": {"gt": 1}}},
             {"range": {"total_on_hand": {"gt": 0}}},
@@ -142,102 +133,116 @@ class Shoppy:
             must.append({"nested": {"path": "taxonomy", "query": {
                 "term": {"taxonomy.id": category_id},
             }}})
-        return self._request("POST", "https://elastic.cody.mn/shoppy/_search", json={
+        result = self._search({
             "query": {"bool": {"must": must}}, "size": limit, "from": offset,
             "sort": [{"_score": "desc"}],
+            "_source": ["id", "slug", "name", "title", "price", "selling_price", "total_on_hand", "image"],
         })
+        return {"hits": {
+            "total": result["hits"]["total"],
+            "hits": [
+                {key: value for key, value in hit.items() if key in {"_id", "_source"}}
+                for hit in result["hits"]["hits"]
+            ],
+        }}
 
     def menus(self) -> list[JSON]:
+        """Return the storefront navigation menus."""
         return self._graphql(queries.MENUS)["menus"]
 
     def flat_categories(self) -> Any:
+        """Return the flat category listing."""
         return self._graphql(queries.FLAT_TAXONS)["flatTaxon"]
 
     def categories(self, parent_id: str | None = None) -> list[JSON]:
+        """Return root categories or the children of a selected category."""
         document = queries.ROOT_TAXONS if parent_id is None else queries.CHILD_TAXONS
         return self._graphql(document, {"parentId": parent_id})["taxons"]["nodes"]
 
     def product(self, slug: str) -> JSON | None:
-        return self._graphql(queries.PRODUCT, {"slug": slug, "width": 120, "height": 0})["listing"]
+        """Return a product listing and its variants by slug."""
+        try:
+            return self._graphql(queries.PRODUCT, {"slug": slug})["listing"]
+        except NotFoundError:
+            return None
 
     def variant_stores(self, variant_id: str) -> JSON | None:
-        return self._graphql(queries.VARIANT_STORES, {"variantId": variant_id})["variant"]
+        """Return stock levels and store locations for a variant."""
+        try:
+            return self._graphql(queries.VARIANT_STORES, {"variantId": variant_id})["variant"]
+        except NotFoundError:
+            return None
 
-    def _remember_order(self, order: JSON | None) -> JSON | None:
-        if order:
-            self._number = order.get("number", self._number)
-            self._order_token = order.get("token", self._order_token)
-        else:
-            self._number = self._order_token = None
-        return order
-
-    def current_order(self, *, number: str | None = None, token: str | None = None) -> JSON | None:
-        return self._remember_order(self._graphql(queries.CURRENT_ORDER, {
-            "number": number if number is not None else self._number,
-            "token": token if token is not None else self._order_token,
-        })["currentOrder"])
+    def current_cart(self) -> JSON | None:
+        """Return the account's active cart, or None if no cart exists."""
+        return self._graphql(queries.CURRENT_ORDER)["currentOrder"]
 
     def add_to_cart(self, variant_id: str, *, quantity: int = 1) -> JSON:
-        if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity < 1:
-            raise ValueError("quantity must be a positive integer")
-        if self._number is None:
-            self.current_order()
-        order = self._graphql(queries.ADD_TO_CART, {
-            "number": self._number, "token": self._order_token,
+        """Add a variant to the current cart and return the updated cart."""
+        if quantity < 1:
+            raise ShoppyError("Quantity must be at least one when adding to the cart.")
+        order = self.current_cart()
+        return self._graphql(queries.ADD_TO_CART, {
+            "number": order["number"] if order else None,
+            "token": order["token"] if order else None,
             "batch": [{"variantId": variant_id, "quantity": quantity}],
         })["order"]
-        self._remember_order(order)
-        return order
 
     def update_cart_item(self, line_item_id: str, *, quantity: int) -> JSON:
         """Set quantity; zero removes the line item."""
-        if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity < 0:
-            raise ValueError("quantity must be a nonnegative integer")
+        if quantity < 0:
+            raise ShoppyError("Quantity must be zero or greater when updating the cart.")
         return self._graphql(queries.UPDATE_ITEM, {
             "input": {"id": line_item_id, "quantity": quantity},
         })["updateItem"]
 
-    def _order_number(self, number: str | None) -> str:
-        selected = number or self._number
-        if not selected:
-            raise ValueError("Provide an order number or load/add to a cart first.")
-        return selected
-
-    def checkout(
-        self, *, email: str, billing_address: JSON, number: str | None = None,
-        shipping_address: JSON | None = None, shipping_address_id: str | None = None,
-        shipping_method_id: str | None = None,
-        action: str = "qpay_merchant",
-    ) -> JSON:
-        """Save checkout details, then submit the order and initialize payment.
-
-        Return updated order details under ``order`` and the submission result
-        under ``paymentAction``. If submission fails, saved details remain;
-        neither request is automatically retried.
-        """
-        if shipping_address is not None and shipping_address_id is not None:
-            raise ValueError("Provide a shipping address or an address ID, not both.")
-        variables: JSON = {"number": self._order_number(number), "params": {
-            "email": email, "billAddressAttributes": billing_address,
+    def checkout(self) -> JSON:
+        """Save checkout details using the current cart and account addresses."""
+        order = self.current_cart()
+        if not order or not order["lineItems"]:
+            raise ShoppyError("Cannot check out an empty order.")
+        profile = self.profile(detailed=True)
+        if not profile["email"]:
+            raise ShoppyError("The account needs an email address before checkout.")
+        billing_address = order["billAddress"]
+        if billing_address is None:
+            billing_address = {
+                "firstname": profile["firstName"], "lastname": profile["lastName"],
+                "phone": profile["mobile"], "isCompany": False,
+            }
+        shipping_address_id = None
+        if not order["digital"]:
+            if order["shipAddress"] is not None:
+                shipping_address_id = order["shipAddress"]["id"]
+            else:
+                addresses = profile["userAddresses"]["nodes"]
+                if not addresses:
+                    raise ShoppyError("Save a shipping address on Shoppy before checkout.")
+                if len(addresses) > 1:
+                    raise ShoppyError("Multiple saved addresses; select a shipping address for the cart on Shoppy before checkout.")
+                shipping_address_id = addresses[0]["address"]["id"]
+        variables: JSON = {"number": order["number"], "params": {
+            "email": profile["email"],
+            "billAddressAttributes": {
+                key: value for key, value in billing_address.items()
+                if key in {"id", "firstname", "lastname", "phone", "company", "isCompany"}
+            },
         }}
-        for key, value in [("shippingAddress", shipping_address),
-                           ("shippingAddressId", shipping_address_id),
-                           ("shippingMethodId", shipping_method_id)]:
-            if value is not None:
-                variables[key] = value
+        if shipping_address_id is not None:
+            variables["shippingAddressId"] = shipping_address_id
         order = self._graphql(queries.UPDATE_CHECKOUT, variables)["updateCheckoutOrder"]
-        if not isinstance(order, dict) or not order:
-            raise ValueError("Checkout update did not return an order.")
-        self._remember_order(order)
-        payment_action = self._graphql(queries.PAYMENT_ACTION, {
-            "number": variables["number"], "action": action,
-        })["paymentAction"]
-        return {"order": order, "paymentAction": payment_action}
+        if not order or not order["lineItems"]:
+            raise ShoppyError("Checkout update did not return a nonempty order.")
+        return order
 
-    def order(self, number: str) -> JSON | None:
-        return self._graphql(queries.ORDER, {"number": number})["order"]
+    def order_status(self, order_number: str) -> JSON | None:
+        """Return order details, including payment and shipping status."""
+        try:
+            return self._graphql(queries.ORDER, {"number": order_number})["order"]
+        except NotFoundError:
+            return None
 
-    def orders(
+    def list_orders(
         self,
         *,
         first: int = 10,
@@ -246,111 +251,55 @@ class Shoppy:
         status: str | None = None,
         filter: JSON | None = None,
     ) -> JSON:
-        """Return one order page with edges, totalCount, and pageInfo.
-
-        Defaults to most recently updated orders without status filters.
-        Pass pageInfo.endCursor as cursor to fetch the next page when
-        pageInfo.hasNextPage is true. Filter and status values use the API's
-        OrderFilter and OrderStatus definitions.
-        """
-        if isinstance(first, bool) or not isinstance(first, int) or first < 1:
-            raise ValueError("first must be a positive integer")
-        variables: JSON = {
-            "first": first,
-            "sort": sort if sort is not None else {"field": "updated_at", "direction": "desc"},
-        }
-        for key, value in [("cursor", cursor), ("status", status), ("filter", filter)]:
+        """Return a page of orders with totals and pagination information."""
+        variables: JSON = {"first": first}
+        for key, value in [("cursor", cursor), ("sort", sort), ("status", status), ("filter", filter)]:
             if value is not None:
                 variables[key] = value
         return self._graphql(queries.ORDERS, variables)["orders"]
 
     def payment_methods(self) -> list[JSON]:
+        """Return the active payment methods."""
         return self._graphql(queries.PAYMENT_METHODS)["paymentMethods"]
 
-    def initiate_payment(self, *, action: str = "m_bank_card", number: str | None = None) -> JSON:
-        """Create a payment attempt; does not pay or retry the mutation."""
+    def initiate_payment(self, *, order_number: str, action: str = "qpay_merchant") -> JSON:
+        """Create a payment attempt for the order and return the provider's response."""
         return self._graphql(queries.ORDER_PAY, {"input": {
-            "number": self._order_number(number), "action": action,
+            "number": order_number, "action": action,
         }})["orderPay"]
 
-    def initiate_socialpay(self, *, number: str | None = None) -> JSON:
-        """Create a SocialPay attempt and return its hosted URL and deeplink."""
-        return self.initiate_payment(action="golomt_wallet", number=number)
-
-    def send_payment_to_mobile(
-        self,
-        payment: JSON,
-        phone: str,
-        *,
-        bank_token: str | None = None,
-    ) -> JSON:
-        """Send a SocialPay payment request to a mobile number.
-
-        Use the result of initiate_socialpay() as payment. The bank token is
-        separate from Shoppy authentication. If payment details omit it, supply
-        the token from the bank's browser session explicitly. This method sends
-        a notification once and returns PENDING/refToken; it neither approves
-        payment nor polls for completion. Only the captured new-session flow
-        is supported.
-        """
+    def send_socialpay(self, url: str) -> JSON:
+        """Send an existing SocialPay invoice to the account's mobile for approval."""
+        phone = self.profile()["mobile"]
+        if not phone:
+            raise ShoppyError("The account needs a mobile number before sending SocialPay.")
         normalized_phone = phone.replace(" ", "")
         if len(normalized_phone) != 8 or not normalized_phone.isascii() or not normalized_phone.isdigit():
-            raise ValueError("phone must contain eight digits, optionally separated by spaces")
-        url = payment.get("attributes", {}).get("url", "")
-        parsed = urlsplit(url)
-        parts = parsed.path.strip("/").split("/")
-        if (
-            parsed.scheme != "https" or parsed.netloc != "ecommerce.golomtbank.com"
-            or parsed.query or parsed.fragment or len(parts) != 3
-            or parts[0] != "socialpay" or parts[1] not in {"mn", "en"}
-        ):
-            raise ValueError("payment must contain a Golomt SocialPay invoice URL")
-        try:
-            invoice = str(UUID(parts[2]))
-        except ValueError:
-            raise ValueError("SocialPay invoice must be a UUID") from None
+            raise ShoppyError("The account mobile number must contain eight digits.")
+        invoice = urlsplit(url).path.rstrip("/").rsplit("/", 1)[-1]
 
-        def bank_request(
-            path: str, payload: JSON, validator: Callable[[JSON], bool],
-            token: str | None = None,
-        ) -> JSON:
-            headers = {"Origin": "https://ecommerce.golomtbank.com", "Referer": url}
-            if token:
-                headers["Authorization"] = f"Bearer {token}"
-            return self._request(
-                "POST", f"https://ecommerce.golomtbank.com{path}",
-                authenticated=False, extra_headers=headers, json=payload,
-                validate=validator,
-            )
-
-        def has_response(result: JSON) -> bool:
-            header, body = result.get("header"), result.get("body")
-            return (
-                isinstance(header, dict) and header.get("code") == 200
-                and header.get("status") == "success"
-                and isinstance(body, dict) and isinstance(body.get("response"), dict)
-                and not body.get("error")
-            )
-
-        details = bank_request("/payment/get/details", {"invoice": invoice}, has_response)
-        token = bank_token or details["body"]["response"].get("token")
-        if not isinstance(token, str) or not token.strip().removeprefix("Bearer ").strip():
-            raise ValueError("Payment details omitted the bank token; provide bank_token from the bank session.")
-        token = token.strip().removeprefix("Bearer ").strip()
-        prepared = bank_request(
-            "/payment/prepare", {"phone": phone},
-            lambda result: has_response(result)
-            and isinstance(result["body"]["response"].get("data"), str)
-            and bool(result["body"]["response"]["data"]),
-            token=token,
+        details = self._bank_request("/payment/get/details", {"invoice": invoice}, url=url)
+        self._check_bank_header(details)
+        bank_token = details["body"]["response"]["token"]
+        if bank_token:
+            bank_token = bank_token.strip().removeprefix("Bearer ").strip()
+        if not bank_token:
+            raise ShoppyError("Payment details omitted the bank session token; SocialPay cannot be sent.")
+        prepared = self._bank_request(
+            "/payment/prepare", {"phone": phone}, url=url, token=bank_token,
         )
-        bank_request(
-            "/payment/newSpCheckSession", {"data": normalized_phone},
-            lambda result: result.get("desc") == "Y",
+        self._check_bank_header(prepared)
+        data = prepared["body"]["response"]["data"]
+        if not data:
+            raise ShoppyError("Payment provider did not prepare the payment.")
+        session = self._bank_request(
+            "/payment/newSpCheckSession", {"data": normalized_phone}, url=url,
         )
-        return bank_request(
-            "/payment/doSendNewSPPaymexTran",
-            {"data": prepared["body"]["response"]["data"]},
-            lambda result: result.get("status") == "PENDING"
-            and isinstance(result.get("refToken"), str) and bool(result["refToken"]),
+        if session["desc"] != "Y":
+            raise ShoppyError("Payment provider rejected the SocialPay session.")
+        result = self._bank_request(
+            "/payment/doSendNewSPPaymexTran", {"data": data}, url=url,
         )
+        if result["status"] != "PENDING" or not result["refToken"]:
+            raise ShoppyError("Payment provider did not accept the SocialPay request.")
+        return result
